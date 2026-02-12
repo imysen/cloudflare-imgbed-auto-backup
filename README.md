@@ -2,6 +2,14 @@
 
 [CloudFlare-ImgBed项目](https://github.com/MarSeventh/CloudFlare-ImgBed)用基于GitHub Actions定期自动备份数据脚本
 
+> [!IMPORTANT]  
+> 由于原项目备份API发生变更，致使先前使用本项目的需要手动更新一下脚本才能使用
+> 1. 在自己的仓库新建文件：`.github/workflows/auto_update.yml`
+> 2. 把自动更新工作流内容完整粘贴进去[（本仓库相同位置）](https://github.com/imysen/cloudflare-imgbed-auto-backup/blob/main/.github/workflows/auto_update.yml)
+> 3. 在 Actions 页面手动触发一次更新脚本  
+> **参考说明**：[GitHub Issue #1](https://github.com/imysen/cloudflare-imgbed-auto-backup/issues/1#issuecomment-3891245958)
+
+
 ## 快速开始
 
 请确保你的cloudflare-imgbed版本大于V2.0.3

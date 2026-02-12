@@ -1,0 +1,43 @@
+name: 自动更新仓库
+
+on:
+  schedule:
+    # 每天UTC时间03:00运行
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 检查是否启用自动更新
+        env:
+          AUTO_UPDATE_ENABLED: ${{ secrets.AUTO_UPDATE_ENABLED || 'true' }}
+        run: |
+          value=$(echo "$AUTO_UPDATE_ENABLED" | tr '[:upper:]' '[:lower:]')
+          if [ "$value" = "false" ] || [ "$value" = "0" ] || [ "$value" = "off" ] || [ "$value" = "no" ]; then
+            echo "AUTO_UPDATE_ENABLED=$AUTO_UPDATE_ENABLED, skip auto update."
+            exit 0
+          fi
+
+      - name: 获取上游更新
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git remote add upstream https://github.com/imysen/cloudflare-imgbed-auto-backup.git
+          git fetch upstream main
+          git fetch origin main
+
+          behind_count=$(git rev-list --count HEAD..upstream/main)
+          if [ "$behind_count" -eq 0 ]; then
+            echo "No updates from upstream."
+            exit 0
+          fi
+
+          git merge upstream/main --no-edit
+          git push origin HEAD:main

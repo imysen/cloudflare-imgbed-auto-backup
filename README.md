@@ -42,6 +42,7 @@
 |---------|------|--------|--------|
 | `MAX_BACKUPS` | 最大保留备份文件数量 | `1145` | `100` |
 | `ENABLE_CHANGE_DETECTION` | 启用智能变更检测 | `true/false` | `true` |
+| `AUTO_UPDATE_ENABLED` | 启用自动更新 | `true/false` | `true` |
 
 ### 2. 启用GitHub Actions
 
@@ -55,7 +56,13 @@
 > 如果你是http/非标准端口，请在变量中填完整的URL，如：`  http://cfbed.1314883.xyz:11451`  
 > 默认拼接为https
 
-### 3. 执行备份
+### 3. 自动更新选项（可选）
+
+项目包含独立的自动更新工作流，会定期检查上游仓库更新并自动合并：
+- 上游仓库：`https://github.com/imysen/cloudflare-imgbed-auto-backup`
+- 默认启用，如需关闭将 `AUTO_UPDATE_ENABLED` 设置为 `false`
+
+### 4. 执行备份
 
 备份程序会：
 - **自动执行**: 每天北京时间02:00自动运行
@@ -71,6 +78,7 @@
 cloudflare-imgbed-auto-backup/
 ├── .github/
 │   └── workflows/
+│       ├── auto_update.yml     # 自动更新工作流配置
 │       └── backup.yml          # GitHub Actions工作流配置
 ├── backups/                    # 备份文件存储目录
 │   ├──.privacy_verified        # 安全性证明文件

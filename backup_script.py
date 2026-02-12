@@ -55,19 +55,23 @@ class BackupManager:
         if not self.base_url.startswith(('http://', 'https://')):
             # 检查是否包含端口号
             if ':' in self.base_url:
-                self.backup_url = f"https://{self.base_url}/api/manage/sysConfig/backup?action=backup"
+                self.backup_url = f"https://{self.base_url}/api/manage/batch/list?includeValue=true&limit=1000"
+                self.legacy_backup_url = f"https://{self.base_url}/api/manage/sysConfig/backup?action=backup"
             else:
-                self.backup_url = f"https://{self.base_url}/api/manage/sysConfig/backup?action=backup"
+                self.backup_url = f"https://{self.base_url}/api/manage/batch/list?includeValue=true&limit=1000"
+                self.legacy_backup_url = f"https://{self.base_url}/api/manage/sysConfig/backup?action=backup"
         else:
             # 移除末尾的斜杠（如果存在）
             base_url_clean = self.base_url.rstrip('/')
-            self.backup_url = f"{base_url_clean}/api/manage/sysConfig/backup?action=backup"
+            self.backup_url = f"{base_url_clean}/api/manage/batch/list?includeValue=true&limit=1000"
+            self.legacy_backup_url = f"{base_url_clean}/api/manage/sysConfig/backup?action=backup"
         
         # 创建备份目录
         self.backup_dir = 'backups'
         os.makedirs(self.backup_dir, exist_ok=True)
         
         logger.info(f"备份管理器初始化完成，备份URL: {self.backup_url}")
+        logger.info(f"备用备份URL: {self.legacy_backup_url}")
         logger.info(f"最大保留备份文件数: {self.max_backups}")
         logger.info(f"变更检测: {'启用' if self.enable_change_detection else '禁用'}")
         logger.info("🔒 私有仓库检查: 强制启用（不可禁用）")
@@ -172,12 +176,12 @@ class BackupManager:
         
         return session
     
-    def authenticate(self, session):
+    def authenticate(self, session, url):
         """处理网站认证"""
         try:
-            logger.info(f"正在连接到: {self.backup_url}")
+            logger.info(f"正在连接到: {url}")
             # 首先访问备份URL，这可能会触发认证
-            response = session.get(self.backup_url, auth=(self.username, self.password), timeout=30)
+            response = session.get(url, auth=(self.username, self.password), timeout=30)
             
             if response.status_code == 401:
                 logger.error("认证失败，请检查用户名和密码")
@@ -207,44 +211,52 @@ class BackupManager:
     def download_backup(self):
         """下载备份文件"""
         session = self.create_session()
-        
-        # 进行认证
-        if not self.authenticate(session):
-            return False
-        
-        try:
-            # 下载备份数据
-            logger.info(f"正在从 {self.backup_url} 下载备份...")
-            response = session.get(self.backup_url, auth=(self.username, self.password))
-            
-            if response.status_code == 200:
-                # 检查响应内容类型
-                content_type = response.headers.get('content-type', '')
-                
-                if 'application/json' in content_type:
-                    # 直接是JSON响应
-                    backup_data = response.json()
-                else:
+
+        def fetch_backup(url, label):
+            # 进行认证
+            if not self.authenticate(session, url):
+                return None
+
+            try:
+                logger.info(f"正在从 {url} 下载备份 ({label})...")
+                response = session.get(url, auth=(self.username, self.password))
+
+                if response.status_code == 200:
+                    # 检查响应内容类型
+                    content_type = response.headers.get('content-type', '')
+
+                    if 'application/json' in content_type:
+                        # 直接是JSON响应
+                        return response.json()
+
                     # 尝试解析为JSON
                     try:
-                        backup_data = response.json()
+                        return response.json()
                     except json.JSONDecodeError:
                         logger.error("响应不是有效的JSON格式")
-                        return False
-                
-                # 保存备份文件
-                return self.save_backup(backup_data)
-                
-            else:
+                        return None
+
                 logger.error(f"下载失败，状态码: {response.status_code}")
-                return False
-                
-        except requests.exceptions.RequestException as e:
-            logger.error(f"下载过程中发生错误: {e}")
-            return False
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON解析错误: {e}")
-            return False
+                logger.error(f"响应内容: {response.text[:500]}")
+                return None
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"下载过程中发生错误: {e}")
+                return None
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON解析错误: {e}")
+                return None
+
+        # 优先使用新API，失败后回退到旧API
+        backup_data = fetch_backup(self.backup_url, 'new')
+        if backup_data is None:
+            logger.warning("新API失败，尝试回退到旧API")
+            backup_data = fetch_backup(self.legacy_backup_url, 'legacy')
+
+        if backup_data is None:
+            raise RuntimeError("新旧API均失败，无法获取备份数据")
+
+        return self.save_backup(backup_data)
     
     def calculate_data_hash(self, data):
         """计算数据的MD5哈希值（排除动态时间戳字段）"""

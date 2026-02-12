@@ -30,6 +30,14 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git remote add upstream https://github.com/imysen/cloudflare-imgbed-auto-backup.git
+
+          upstream_head=$(git ls-remote https://github.com/imysen/cloudflare-imgbed-auto-backup.git refs/heads/main | awk '{print $1}')
+          local_head=$(git rev-parse HEAD)
+          if [ -n "$upstream_head" ] && [ "$upstream_head" = "$local_head" ]; then
+            echo "Upstream is up-to-date with local HEAD, skip update."
+            exit 0
+          fi
+
           git fetch upstream main
           git fetch origin main
 
@@ -39,5 +47,9 @@ jobs:
             exit 0
           fi
 
-          git merge upstream/main --no-edit
+          # Prefer upstream changes, but keep local backups directory intact
+          git merge upstream/main --no-edit --allow-unrelated-histories -X theirs
+          git checkout --ours -- backups/
+          git add backups/
+          git commit -m "Keep local backups after upstream merge" || true
           git push origin HEAD:main

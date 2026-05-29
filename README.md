@@ -2,6 +2,8 @@
 
 [CloudFlare-ImgBed项目](https://github.com/MarSeventh/CloudFlare-ImgBed)用基于GitHub Actions定期自动备份数据脚本
 
+由于上游接口更新，在部分版本此脚本可能无法使用，计划在未来一周修复！如遇不可用/格式不规范的情况请提起issue！
+
 > [!IMPORTANT]  
 > 由于原项目备份API发生变更，致使先前使用本项目的需要手动更新一下脚本才能使用
 > 1. 在自己的仓库新建文件：`.github/workflows/auto_update.yml`

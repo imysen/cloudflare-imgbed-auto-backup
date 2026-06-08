@@ -53,18 +53,15 @@ class BackupManager:
         # 构建完整的备份URL
         # 如果base_url不包含协议，默认使用https
         if not self.base_url.startswith(('http://', 'https://')):
-            # 检查是否包含端口号
-            if ':' in self.base_url:
-                self.backup_url = f"https://{self.base_url}/api/manage/batch/list?includeValue=true&limit=1000"
-                self.legacy_backup_url = f"https://{self.base_url}/api/manage/sysConfig/backup?action=backup"
-            else:
-                self.backup_url = f"https://{self.base_url}/api/manage/batch/list?includeValue=true&limit=1000"
-                self.legacy_backup_url = f"https://{self.base_url}/api/manage/sysConfig/backup?action=backup"
+            base_url_clean = f"https://{self.base_url}".rstrip('/')
         else:
             # 移除末尾的斜杠（如果存在）
             base_url_clean = self.base_url.rstrip('/')
-            self.backup_url = f"{base_url_clean}/api/manage/batch/list?includeValue=true&limit=1000"
-            self.legacy_backup_url = f"{base_url_clean}/api/manage/sysConfig/backup?action=backup"
+
+        self.site_url = base_url_clean
+        self.admin_login_url = f"{self.site_url}/api/auth/adminLogin"
+        self.backup_url = f"{self.site_url}/api/manage/batch/list?includeValue=true&limit=1000"
+        self.legacy_backup_url = f"{self.site_url}/api/manage/sysConfig/backup?action=backup"
         
         # 创建备份目录
         self.backup_dir = 'backups'
@@ -174,8 +171,43 @@ class BackupManager:
         
         return session
     
+    def authenticate_with_admin_session(self, session):
+        """使用管理端登录接口创建Cookie会话"""
+        try:
+            logger.info(f"正在通过管理端登录接口认证: {self.admin_login_url}")
+            response = session.post(
+                self.admin_login_url,
+                json={"username": self.username, "password": self.password},
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                logger.info("管理端会话认证成功")
+                return True
+            elif response.status_code == 401:
+                logger.error("管理端会话认证失败，请检查用户名和密码")
+                return False
+
+            logger.error(f"管理端会话认证失败，状态码: {response.status_code}")
+            logger.error(f"响应内容: {response.text[:500]}")
+            return False
+
+        except requests.exceptions.ConnectTimeout:
+            logger.error("连接超时，请检查网络连接和服务器状态")
+            return False
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"连接错误: {e}")
+            logger.error("可能的原因：")
+            logger.error("1. 服务器未运行或端口未开放")
+            logger.error("2. 防火墙阻止了连接")
+            logger.error("3. URL 配置不正确")
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"管理端会话认证过程中发生错误: {e}")
+            return False
+
     def authenticate(self, session, url):
-        """处理网站认证"""
+        """处理旧版Basic认证"""
         try:
             logger.info(f"正在连接到: {url}")
             # 首先访问备份URL，这可能会触发认证
@@ -208,45 +240,59 @@ class BackupManager:
     
     def download_backup(self):
         """下载备份文件"""
-        session = self.create_session()
 
-        def fetch_backup(url, label):
-            # 进行认证
+        def parse_backup_response(response):
+            if response.status_code == 200:
+                try:
+                    parsed_data = response.json()
+                except json.JSONDecodeError:
+                    logger.error("响应不是有效的JSON格式")
+                    return None
+
+                return parsed_data, response.content
+
+            logger.error(f"下载失败，状态码: {response.status_code}")
+            logger.error(f"响应内容: {response.text[:500]}")
+            return None
+
+        def fetch_backup_with_session_auth(url, label):
+            session = self.create_session()
+            if not self.authenticate_with_admin_session(session):
+                return None
+
+            try:
+                logger.info(f"正在从 {url} 下载备份 ({label})...")
+                response = session.get(url, timeout=30)
+                return parse_backup_response(response)
+            except requests.exceptions.RequestException as e:
+                logger.error(f"下载过程中发生错误: {e}")
+                return None
+
+        def fetch_backup_with_basic_auth(url, label):
+            session = self.create_session()
             if not self.authenticate(session, url):
                 return None
 
             try:
                 logger.info(f"正在从 {url} 下载备份 ({label})...")
-                response = session.get(url, auth=(self.username, self.password))
-
-                if response.status_code == 200:
-                    try:
-                        parsed_data = response.json()
-                    except json.JSONDecodeError:
-                        logger.error("响应不是有效的JSON格式")
-                        return None
-
-                    return parsed_data, response.content
-
-                logger.error(f"下载失败，状态码: {response.status_code}")
-                logger.error(f"响应内容: {response.text[:500]}")
-                return None
-
+                response = session.get(url, auth=(self.username, self.password), timeout=30)
+                return parse_backup_response(response)
             except requests.exceptions.RequestException as e:
                 logger.error(f"下载过程中发生错误: {e}")
                 return None
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON解析错误: {e}")
-                return None
 
-        # 优先使用新API，失败后回退到旧API
-        backup_result = fetch_backup(self.backup_url, 'new')
+        # 优先使用新API的新会话认证，失败后回退到新API旧Basic认证，再回退到旧API旧Basic认证
+        backup_result = fetch_backup_with_session_auth(self.backup_url, 'new session auth')
         if backup_result is None:
-            logger.warning("新API失败，尝试回退到旧API")
-            backup_result = fetch_backup(self.legacy_backup_url, 'legacy')
+            logger.warning("新API会话认证失败，尝试回退到新API旧Basic认证")
+            backup_result = fetch_backup_with_basic_auth(self.backup_url, 'new basic auth')
 
         if backup_result is None:
-            raise RuntimeError("新旧API均失败，无法获取备份数据")
+            logger.warning("新API旧Basic认证失败，尝试回退到旧API旧Basic认证")
+            backup_result = fetch_backup_with_basic_auth(self.legacy_backup_url, 'legacy basic auth')
+
+        if backup_result is None:
+            raise RuntimeError("所有认证方式和API均失败，无法获取备份数据")
 
         backup_data, raw_content = backup_result
         return self.save_backup(backup_data, raw_content)

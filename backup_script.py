@@ -128,10 +128,8 @@ class BackupManager:
                 logger.error("🔧 设置完成后，您可以通过以下方式之一重新运行：")
                 logger.error("   • 手动触发 GitHub Actions workflow")
                 logger.error("   • 等待下次定时任务执行")
-                logger.error("   • 或者设置环境变量 FORCE_PRIVATE_REPO=false 来跳过此检查（不推荐）")
                 logger.error("")
                 logger.error("⚠️  为了您的数据安全，备份任务现在将被终止")
-                
                 return False
             
             logger.info("✅ 仓库隐私检查通过：仓库为私有状态")
@@ -222,19 +220,13 @@ class BackupManager:
                 response = session.get(url, auth=(self.username, self.password))
 
                 if response.status_code == 200:
-                    # 检查响应内容类型
-                    content_type = response.headers.get('content-type', '')
-
-                    if 'application/json' in content_type:
-                        # 直接是JSON响应
-                        return response.json()
-
-                    # 尝试解析为JSON
                     try:
-                        return response.json()
+                        parsed_data = response.json()
                     except json.JSONDecodeError:
                         logger.error("响应不是有效的JSON格式")
                         return None
+
+                    return parsed_data, response.content
 
                 logger.error(f"下载失败，状态码: {response.status_code}")
                 logger.error(f"响应内容: {response.text[:500]}")
@@ -248,15 +240,16 @@ class BackupManager:
                 return None
 
         # 优先使用新API，失败后回退到旧API
-        backup_data = fetch_backup(self.backup_url, 'new')
-        if backup_data is None:
+        backup_result = fetch_backup(self.backup_url, 'new')
+        if backup_result is None:
             logger.warning("新API失败，尝试回退到旧API")
-            backup_data = fetch_backup(self.legacy_backup_url, 'legacy')
+            backup_result = fetch_backup(self.legacy_backup_url, 'legacy')
 
-        if backup_data is None:
+        if backup_result is None:
             raise RuntimeError("新旧API均失败，无法获取备份数据")
 
-        return self.save_backup(backup_data)
+        backup_data, raw_content = backup_result
+        return self.save_backup(backup_data, raw_content)
     
     def calculate_data_hash(self, data):
         """计算数据的MD5哈希值（排除动态时间戳字段）"""
@@ -337,37 +330,37 @@ class BackupManager:
             logger.info("🔄 检测到实际数据变化，将保存新的备份")
             return True
     
-    def save_backup(self, data):
+    def save_backup(self, data, raw_content):
         """保存备份数据到文件"""
         try:
             # 检测数据是否发生变化（如果启用了变更检测）
             if self.enable_change_detection and not self.is_data_changed(data):
                 logger.info("数据未发生变化，跳过保存备份文件")
                 return True  # 返回True表示操作成功（虽然没有保存新文件）
-            
+
             # 生成文件名（包含时间戳）
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"backup_{timestamp}.json"
             filepath = os.path.join(self.backup_dir, filename)
-            
-            # 保存JSON数据
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            
+
+            # 保存原始响应内容
+            with open(filepath, 'wb') as f:
+                f.write(raw_content)
+
             logger.info(f"备份文件已保存: {filepath}")
-            
+
             # 同时保存一个最新的备份文件
             latest_filepath = os.path.join(self.backup_dir, 'latest_backup.json')
-            with open(latest_filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            
+            with open(latest_filepath, 'wb') as f:
+                f.write(raw_content)
+
             logger.info(f"最新备份文件已更新: {latest_filepath}")
-            
+
             # 清理旧备份文件（保留最近指定数量个）
             self.cleanup_old_backups()
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"保存备份文件时发生错误: {e}")
             return False
